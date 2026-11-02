@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Neon Scroller — BLE Controller</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,Arial;background:#080d18;color:#e8f7f5}
+*{box-sizing:border-box}body{margin:0;padding:env(safe-area-inset-top) 16px 40px;max-width:600px;margin-inline:auto}
+h1{font-size:1.45rem;letter-spacing:.12em;color:#9dffea;margin:26px 0 3px}
+.sub{color:#8494a7;font-size:.85rem;margin-bottom:20px}.card{background:#131d2e;border:1px solid #2a3d53;border-radius:17px;padding:18px;margin:14px 0}
+.status{display:flex;justify-content:space-between;gap:8px;align-items:center}.pill{border:1px solid #57687b;border-radius:30px;padding:6px 11px;font-size:.8rem}
+.connected{color:#82ffbb;border-color:#82ffbb}.preview{font-size:clamp(20px,6vw,32px);font-style:italic;white-space:nowrap;overflow:hidden;text-align:center;padding:25px 0;font-weight:800}
+label{display:block;font-size:.9rem;color:#b6d3d4;margin:10px 0 7px}
+textarea{resize:vertical;width:100%;min-height:78px;padding:13px;background:#07101c;color:white;border:1px solid #4a657b;border-radius:11px;font:inherit}
+button{cursor:pointer;border:0;border-radius:11px;padding:13px 14px;font-size:1rem;font-weight:750;background:#2b3c52;color:white}
+button:disabled{opacity:.45;cursor:not-allowed}.primary{background:#8dffdf;color:#061320;width:100%;margin-top:12px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}.grid button{font-size:.82rem;overflow-wrap:anywhere}
+input[type=range]{width:100%;accent-color:#9dffea}.fullcolor{margin-top:12px;padding:12px;background:#0a1423;border-radius:12px}.fullcolor input[type=color]{width:100%;height:48px;background:transparent;border:0;cursor:pointer}.hexinput{width:110px;background:#07101c;border:1px solid #4a657b;border-radius:8px;color:white;padding:10px;font:inherit}.rgbrow{display:grid;grid-template-columns:18px 1fr 34px;gap:9px;align-items:center;margin:8px 0}.rgbrow span{font-size:.8rem;color:#a9bec9;text-align:right}.swatches{display:flex;gap:10px;flex-wrap:wrap}.swatch{height:42px;width:42px;border-radius:50%;border:3px solid transparent}
+.swatch.active{outline:2px solid white;outline-offset:3px}.row{display:flex;justify-content:space-between;align-items:center}
+small{color:#8c9dae;display:block;line-height:1.5;margin-top:10px}#log{font-size:.83rem;color:#c2d6e1;min-height:20px}
+</style></head><body>
+<h1>NEON SCROLLER</h1><div class="sub">Waveshare ESP32-S3-LCD-3.16 · Bluetooth LE</div>
+<div class="card"><div class="status"><strong>DISPLAY CONNECTION</strong><span class="pill" id="status">Disconnected</span></div>
+<button id="connect" class="primary">ᛒ Connect to Display</button><small>Open this HTTPS page in Bluefy on your iPhone. Turn on Bluetooth, then tap Connect.</small></div>
+<div class="card"><div class="row"><strong>BATTERY MONITOR</strong><span class="pill" id="batteryStatus">Waiting for BLE</span></div>
+<div class="row" style="margin-top:14px"><span style="font-size:2rem;font-weight:800;color:#9dffea" id="batteryPercent">—%</span><span id="batteryVoltage">— V</span></div>
+<div style="height:12px;background:#293c50;border-radius:20px;overflow:hidden;margin:12px 0"><div id="batteryBar" style="height:100%;width:0%;background:#9dffea;transition:width .3s"></div></div>
+<div class="row"><span>Battery level (estimated)</span><span id="batteryTrend">Monitoring…</span></div>
+<small id="batteryInfo">Readings every 10 seconds. Percentage is estimated from voltage; charging current and USB connection status are not measured.</small></div>
+<div class="card"><div class="sub">MESSAGE PREVIEW</div><div class="preview" id="preview">xH34D5H07x</div>
+<label for="message">Scrolling message (up to 120 characters)</label>
+<textarea id="message" maxlength="120">xH34D5H07x</textarea>
+<button id="send" class="primary" disabled>Send Message</button><p id="log" role="status"></p></div>
+<div class="card"><strong>QUICK MESSAGES</strong><div class="grid" id="presets" style="margin-top:14px"></div></div>
+<div class="card"><div class="row"><strong>SCROLL SPEED</strong><span id="speedValue">24 px/frame</span></div>
+<input type="range" id="speed" min="1" max="48" value="24" step="1"><small>Changes are sent when you release the slider.</small>
+<label>TEXT COLOR</label><div class="swatches" id="swatches"></div>
+<div class="fullcolor"><label for="customText">Full color picker — text</label><input type="color" id="customText" value="#96bfb1"><div class="row"><label for="textHex">HEX color</label><input class="hexinput" id="textHex" value="#96BFB1" maxlength="7" spellcheck="false"></div><div id="textRgb"></div></div>
+<label>BACKGROUND COLOR</label><div class="swatches" id="backgroundSwatches"></div>
+<div class="fullcolor"><label for="customBackground">Full color picker — background</label><input type="color" id="customBackground" value="#000000"><div class="row"><label for="backgroundHex">HEX color</label><input class="hexinput" id="backgroundHex" value="#000000" maxlength="7" spellcheck="false"></div><div id="backgroundRgb"></div></div></div>
+<small>Works with the included matching ESP32 firmware. This is a real BLE controller when hosted on HTTPS and opened in a Web Bluetooth-capable browser. Chrome on iPhone cannot connect directly.</small>
+<script>
+'use strict';
+const SERVICE='76a40001-7891-4d0c-9f28-b20a85a6d351';
+const WRITE='76a40002-7891-4d0c-9f28-b20a85a6d351';
+const BATTERY='76a40003-7891-4d0c-9f28-b20a85a6d351';
+let device=null, characteristic=null, batteryCharacteristic=null, batteryHistory=[], chosenColor='#96BFB1', chosenBackground='#000000';
+const $=id=>document.getElementById(id);
+const log=msg=>{$('log').textContent=msg};
+const connected=()=>!!(device?.gatt?.connected && characteristic);
+function refresh(){
+ $('status').textContent=connected()?'Connected':'Disconnected';
+ $('status').classList.toggle('connected',connected());
+ $('send').disabled=!connected();
+ $('connect').textContent=connected()?'Disconnect':'ᛒ Connect to Display';
+}
+function batteryChanged(event){
+ const raw=new TextDecoder().decode(event.target.value);
+ const match=/^V:(\d+),P:(-?\d+)$/.exec(raw);
+ if(!match)return;
+ const mv=Number(match[1]), percent=Number(match[2]);
+ if(percent<0){$('batteryStatus').textContent='Calibration needed';$('batteryPercent').textContent='—%';$('batteryVoltage').textContent='— V';return}
+ $('batteryStatus').textContent='Live';
+ $('batteryPercent').textContent=percent+'%';
+ $('batteryVoltage').textContent=(mv/1000).toFixed(2)+' V';
+ $('batteryBar').style.width=percent+'%';
+ const now=Date.now();batteryHistory.push({now,percent});
+ batteryHistory=batteryHistory.filter(x=>now-x.now<=60*60*1000);
+ const first=batteryHistory[0],elapsed=(now-first.now)/3600000;
+ const delta=percent-first.percent;
+ $('batteryTrend').textContent=(elapsed>=0.08&&Math.abs(delta)>=2)?((delta>0?'+':'')+(delta/elapsed).toFixed(1)+'%/hr (approx)'):'Trend pending';
+}
+function cleanMessage(v){return v.replace(/[^\x20-\x7e]/g,'').slice(0,120)}
+function preview(){ $('preview').textContent=$('message').value||' '; $('preview').style.color=chosenColor; $('preview').style.backgroundColor=chosenBackground}
+$('message').addEventListener('input',preview);
+$('connect').addEventListener('click',async()=>{
+ if(connected()){device.gatt.disconnect();characteristic=null;refresh();return}
+ if(!navigator.bluetooth){log('Web Bluetooth unavailable. Open this page in Bluefy on iPhone, not Chrome/Safari.');return}
+ try{
+  log('Select NEON-SCROLLER from the Bluetooth list…');
+  device=await navigator.bluetooth.requestDevice({filters:[{name:'NEON-SCROLLER'}],optionalServices:[SERVICE]});
+  device.addEventListener('gattserverdisconnected',()=>{characteristic=null;batteryCharacteristic=null;refresh();$('batteryStatus').textContent='Disconnected';log('Disconnected')});
+  const server=await device.gatt.connect();
+  const service=await server.getPrimaryService(SERVICE);
+  characteristic=await service.getCharacteristic(WRITE);
+  batteryCharacteristic=await service.getCharacteristic(BATTERY);
+  batteryCharacteristic.addEventListener('characteristicvaluechanged',batteryChanged);
+  await batteryCharacteristic.startNotifications();
+  const initial=await batteryCharacteristic.readValue();
+  batteryChanged({target:{value:initial}});
+  refresh();log('Connected! Send a message.');
+ }catch(err){log('Connection failed: '+err.message);refresh()}
+});
+const encoder=new TextEncoder();
+async function writePacket(s){
+ if(!connected())throw new Error('Not connected');
+ const data=encoder.encode(s);
+ if(data.length>20)throw new Error('Packet too large');
+ if(characteristic.writeValueWithResponse)await characteristic.writeValueWithResponse(data);
+ else await characteristic.writeValue(data);
+}
+async function sendMessage(){
+ const value=cleanMessage($('message').value);
+ if(!value){log('Enter a message first');return}
+ $('message').value=value;preview();
+ try{
+  $('send').disabled=true;
+  await writePacket('B');
+  for(let i=0;i<value.length;i+=18)await writePacket('A:'+value.slice(i,i+18));
+  await writePacket('E');
+  log('Sent: '+value);
+ }catch(e){log('Send failed: '+e.message)}
+ finally{refresh()}
+}
+$('send').addEventListener('click',sendMessage);
+for(const preset of ['xH34D5H07x','CALL ME DADDY','ALLOY ASH','FEED ME!!!','HANGRY','BOSS']){
+ const b=document.createElement('button');b.textContent=preset;
+ b.addEventListener('click',()=>{$('message').value=preset;preview();if(connected())sendMessage()});
+ $('presets').appendChild(b);
+}
+$('speed').addEventListener('input',()=>{$('speedValue').textContent=$('speed').value+' px/frame'});
+$('speed').addEventListener('change',async()=>{if(connected())try{await writePacket('S:'+$('speed').value);log('Speed updated')}catch(e){log(e.message)}});
+const controls={text:{picker:'customText',hex:'textHex',rgb:'textRgb',swatches:'swatches',command:'C:'},background:{picker:'customBackground',hex:'backgroundHex',rgb:'backgroundRgb',swatches:'backgroundSwatches',command:'G:'}};
+const clamp=v=>Math.min(255,Math.max(0,Number(v)||0));
+function rgbFromHex(hex){return [1,3,5].map(i=>parseInt(hex.slice(i,i+2),16))}
+function hexFromRgb(rgb){return '#'+rgb.map(n=>clamp(n).toString(16).padStart(2,'0')).join('').toUpperCase()}
+async function sendColor(kind){const cfg=controls[kind],value=kind==='text'?chosenColor:chosenBackground;
+ if(connected())try{await writePacket(cfg.command+value.slice(1));log((kind==='text'?'Text':'Background')+' color updated: '+value)}catch(e){log('Color update failed: '+e.message)}
+}
+function setColor(kind,value,send=true){
+ value=value.toUpperCase();if(!/^#[0-9A-F]{6}$/.test(value))return;
+ if(kind==='text')chosenColor=value;else chosenBackground=value;
+ const cfg=controls[kind];$(cfg.picker).value=value;$(cfg.hex).value=value;
+ const rgb=rgbFromHex(value);
+ document.querySelectorAll('#'+cfg.rgb+' input[type=range]').forEach((slider,i)=>{slider.value=rgb[i];slider.nextElementSibling.textContent=rgb[i]});
+ document.querySelectorAll('#'+cfg.swatches+' .swatch').forEach(b=>b.classList.toggle('active',b.dataset.color===value));
+ preview();if(send)sendColor(kind);
+}
+for(const kind of ['text','background']){
+ const cfg=controls[kind];
+ const colors=kind==='text'?['#96BFB1','#FF39C6','#00FFFF','#FFFFFF','#FFE44D','#000000','#FF0000','#00FF00','#0000FF']:['#000000','#FFFFFF','#FF39C6','#00FFFF','#132347','#00A03B','#FF0000','#0000FF','#FFE44D'];
+ for(const color of colors){const b=document.createElement('button');b.className='swatch';b.style.background=color;b.dataset.color=color;b.setAttribute('aria-label',kind+' '+color);b.addEventListener('click',()=>setColor(kind,color));$(cfg.swatches).appendChild(b)}
+ for(let i=0;i<3;i++){
+  const row=document.createElement('div');row.className='rgbrow';
+  const lab=document.createElement('label');lab.textContent=['R','G','B'][i];
+  const slider=document.createElement('input');slider.type='range';slider.min='0';slider.max='255';slider.step='1';
+  const out=document.createElement('span');row.append(lab,slider,out);$(cfg.rgb).appendChild(row);
+  slider.addEventListener('input',()=>{const rgb=[...document.querySelectorAll('#'+cfg.rgb+' input[type=range]')].map(el=>Number(el.value));setColor(kind,hexFromRgb(rgb),false)});
+  slider.addEventListener('change',()=>sendColor(kind));
+ }
+ $(cfg.picker).addEventListener('input',e=>setColor(kind,e.target.value,false));
+ $(cfg.picker).addEventListener('change',()=>sendColor(kind));
+ $(cfg.hex).addEventListener('change',e=>{let value=e.target.value.trim();if(!value.startsWith('#'))value='#'+value;if(/^#[0-9a-fA-F]{6}$/.test(value))setColor(kind,value);else {log('Use a 6-digit HEX color, for example #96BFB1');e.target.value=kind==='text'?chosenColor:chosenBackground}});
+ setColor(kind,kind==='text'?chosenColor:chosenBackground,false);
+}
+preview();refresh();
+</script></body></html>
