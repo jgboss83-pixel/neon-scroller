@@ -111,7 +111,7 @@ async function sendMessage(){
  finally{refresh()}
 }
 $('send').addEventListener('click',sendMessage);
-for(const preset of ['xH34D5H07x','CALL ME DADDY','ALLOY ASH','FEED ME!!!','HANGRY','BOSS']){
+for(const preset of ['fed :)','CALL ME DADDY','ALLOY ASH','FEED ME!!!','HANGRY','eff u >:(']){
  const b=document.createElement('button');b.textContent=preset;
  b.addEventListener('click',()=>{$('message').value=preset;preview();if(connected())sendMessage()});
  $('presets').appendChild(b);
